@@ -8,7 +8,7 @@ import torch
 
 from trinity.common.experience import Experience
 from trinity.common.models.model import ModelWrapper
-from trinity.common.rewards.reward_fn import MathRewardFn, RewardFn
+from trinity.common.rewards.reward_fn import MathRewardFn, RewardFn, ElemRewardFn
 from trinity.utils.log import get_logger
 from trinity.utils.registry import Registry
 
@@ -144,6 +144,27 @@ class MathWorkflow(SimpleWorkflow):
 <think> reasoning process here </think>
 <answer> answer here </answer>.
 """
+        super().__init__(
+            model,
+            **kwargs,
+        )
+
+
+@WORKFLOWS.register_module("elem_workflow")
+class ElemWorkflow(SimpleWorkflow):
+    """A workflow for math tasks as introduced in DeepSeek-R1."""
+
+    def __init__(
+        self,
+        model: ModelWrapper,
+        **kwargs,
+    ):
+        from trinity.common.elem_prompts import test_prompt_v2e1 as system_prompt
+        if kwargs.get("reward_fn", None) is None:
+            kwargs["reward_fn"] = ElemRewardFn
+            kwargs[
+                "system_prompt"
+            ] = system_prompt
         super().__init__(
             model,
             **kwargs,

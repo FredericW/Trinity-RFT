@@ -4,7 +4,7 @@ import unittest
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
-from trinity.common.workflows import MathWorkflow
+from trinity.common.workflows import MathWorkflow, ElemWorkflow
 
 
 @dataclass
@@ -94,3 +94,21 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(experiences[0].reward, 1.1)
         self.assertEqual(experiences[1].reward, 0.9)
         self.assertEqual(experiences[2].reward, 0.9)
+
+    def test_eleme_workflow(self) -> None:
+        model = MagicMock()
+        model.chat.return_value = [
+            MockResponse("是否继续对话：yes，对话建议：您之前使用过什么药物吗？"),
+            MockResponse("是否继续对话：yes，对话建议：您有没有尿痛、尿频、尿急等其他症状？"),
+            MockResponse("是否继续对话：no，对话建议：感谢您的反馈，希望您能继续保持好心情。"),
+        ]
+        workflow = ElemWorkflow(
+            model=model,
+            task_desc="",
+            truth=r"是否继续对话：yes\n反馈信息样例：“伴随症状：无尿频，伴随症状：无尿痛，伴随症状：无尿急，患者已就诊或用药情况：前列丸”",
+        )
+        experiences = workflow.run()
+        # self.assertEqual(len(experiences), 1)
+        self.assertEqual(experiences[0].reward, 2.0)
+        self.assertEqual(experiences[1].reward, 2.0)
+        self.assertEqual(experiences[2].reward, 0.0)

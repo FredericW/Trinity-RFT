@@ -17,6 +17,11 @@ from trinity.utils.eval_utils import (
 from trinity.utils.log import get_logger
 from trinity.utils.registry import Registry
 
+import dashscope
+import json
+import os
+from trinity.common.elem_prompts import reward_prompt_v1a as reward_prompt
+
 logger = get_logger(__name__)
 
 
@@ -195,3 +200,67 @@ class CountDownRewardFn(RewardFn):
                 return format_score
         except Exception as e:  # noqa: F841
             return format_score
+
+
+@REWARD_FUNCTIONS.register_module("elem_reward")
+class ElemRewardFn(RewardFn):
+    """A reward function that rewards for medical querying task."""
+
+    def __init__(
+        self,
+    ) -> None:
+        self.stream = False
+        self.model_name = "qwen2.5-72b-instruct"
+        self.enable_thinking = False
+        self.temp = 0.7
+
+    def __call__(  # type: ignore
+        self,
+        response: str,
+        prompt: Optional[str] = None,
+        truth: Optional[str] = None,
+        return_dict: Optional[bool] = False,
+    ) -> Union[float, dict]:
+        decision_score, matching_score = self.llm_reward(response, prompt, truth)
+
+        if return_dict:
+            return {"decision_score": decision_score, "matching_score": matching_score}
+
+        return decision_score + matching_score
+
+    def llm_reward(self, response, prompt, truth):
+        sys_prompt = reward_prompt.format(truth)
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": response},
+
+        ]
+        response = dashscope.Generation.call(
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            model=self.model_name,
+            messages=messages,
+            stream=self.stream,
+            result_format='message',
+            enable_thinking=self.enable_thinking,
+            temperature=self.temp
+        )
+        if self.stream == False:
+            content = response["output"]["choices"][0]["message"]["content"]
+        else:
+            full_content = ""
+            for chunk in response:
+                full_content += chunk.output.choices[0].message.content
+            content = full_content
+
+        pattern = r"<(\w+)>(.*?)</\1>"
+        matches = re.findall(pattern, content)
+        for tag_name, content in matches:
+            if tag_name == "think":
+                think = content
+            if tag_name == "decision_score":
+                decision_score = float(content)
+            if tag_name == "matching_score":
+                matching_score = float(content)
+        return decision_score, matching_score
+
+
