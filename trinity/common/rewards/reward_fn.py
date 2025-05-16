@@ -2,6 +2,7 @@
 """Base Reward Function Class."""
 import json
 import re
+import time
 from abc import ABC, abstractmethod
 from typing import Callable, Optional, Union
 
@@ -210,9 +211,10 @@ class ElemRewardFn(RewardFn):
         self,
     ) -> None:
         self.stream = False
-        self.model_name = "qwen2.5-72b-instruct"
+        self.model_name = "qwen2.5-14b-instruct"
         self.enable_thinking = False
         self.temp = 0.7
+        self.sys_prompt = reward_prompt
 
     def __call__(  # type: ignore
         self,
@@ -221,6 +223,7 @@ class ElemRewardFn(RewardFn):
         truth: Optional[str] = None,
         return_dict: Optional[bool] = False,
     ) -> Union[float, dict]:
+        time.sleep(0.1)
         decision_score, matching_score = self.llm_reward(response, prompt, truth)
 
         if return_dict:
@@ -229,38 +232,55 @@ class ElemRewardFn(RewardFn):
         return decision_score + matching_score
 
     def llm_reward(self, response, prompt, truth):
-        sys_prompt = reward_prompt.format(truth)
         messages = [
-            {"role": "system", "content": sys_prompt},
+            {"role": "system", "content": self.sys_prompt.format(truth)},
             {"role": "user", "content": response},
 
         ]
-        response = dashscope.Generation.call(
-            api_key=os.getenv("DASHSCOPE_API_KEY"),
-            model=self.model_name,
-            messages=messages,
-            stream=self.stream,
-            result_format='message',
-            enable_thinking=self.enable_thinking,
-            temperature=self.temp
-        )
-        if self.stream == False:
-            content = response["output"]["choices"][0]["message"]["content"]
-        else:
-            full_content = ""
-            for chunk in response:
-                full_content += chunk.output.choices[0].message.content
-            content = full_content
+        # logger.info(f"Truth:\n{truth}")
+        # logger.info(f"Rollout:\n{response}")
+        try_count, max_retries = 0, 5
+        while try_count <= max_retries:
+            try:
+                response = dashscope.Generation.call(
+                    api_key=os.getenv("DASHSCOPE_API_KEY"),
+                    model=self.model_name,
+                    messages=messages,
+                    stream=self.stream,
+                    result_format='message',
+                    enable_thinking=self.enable_thinking,
+                    temperature=self.temp
+                )
+                if self.stream == False:
+                    content = response["output"]["choices"][0]["message"]["content"]
+                else:
+                    full_content = ""
+                    for chunk in response:
+                        full_content += chunk.output.choices[0].message.content
+                    content = full_content
+                logger.info(f"Reward Response:\n{content}")
 
-        pattern = r"<(\w+)>(.*?)</\1>"
-        matches = re.findall(pattern, content)
-        for tag_name, content in matches:
-            if tag_name == "think":
-                think = content
-            if tag_name == "decision_score":
-                decision_score = float(content)
-            if tag_name == "matching_score":
-                matching_score = float(content)
-        return decision_score, matching_score
+                decision_score, matching_score = 0.0, 0.0
+                pattern = r"<(\w+)>(.*?)</\1>"
+                matches = re.findall(pattern, content)
+                for tag_name, content in matches:
+                    if tag_name == "think":
+                        think = content
+                    if tag_name == "decision_score":
+                        decision_score = float(content)
+                    if tag_name == "matching_score":
+                        matching_score = float(content)
+                # logger.info(f"Reward Score:\ndecision={decision_score}, matching={matching_score}")
+                return decision_score, matching_score
+            except Exception as e:
+                try_count += 1
+                if try_count > max_retries:
+                    logger.warning("retried too many times, abort task.")
+                    raise  # 抛出最后一次的异常
+                else:
+                    logger.warning(
+                        f"error: {e}\nresponse:{response}\nretries: {try_count}")
+                time.sleep(try_count * 1)
+
 
 

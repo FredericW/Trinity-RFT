@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Base Workflow Class"""
-
+import logging
 from abc import ABC, abstractmethod
 from typing import List
 
@@ -163,9 +163,10 @@ class ElemWorkflow(SimpleWorkflow):
         from trinity.common.elem_prompts import test_prompt_v2e1 as system_prompt
         if kwargs.get("reward_fn", None) is None:
             kwargs["reward_fn"] = ElemRewardFn
-            kwargs[
-                "system_prompt"
-            ] = system_prompt
+        kwargs[
+            "system_prompt"
+        ] = system_prompt
+
         super().__init__(
             model,
             **kwargs,
