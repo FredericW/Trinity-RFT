@@ -18,12 +18,11 @@ def bench(config: Config) -> None:
     explorer = Explorer.remote(config)
     try:
         ray.get(explorer.prepare.remote())
-        ray.get(explorer.sync_weight.remote())
-        _, step = ray.get(explorer.eval.remote())
-        logger.info("Evaluation finished.")
-        ray.get(explorer.flush_log.remote(step=step))
+        ray.get(explorer.benchmark.remote())
+        logger.info("Benchmark finished.")
+        ray.get(explorer.shutdown.remote())
     except Exception as e:
-        logger.error(f"Evaluation failed: {e}")
+        logger.error(f"Benchmark failed: {e}")
         raise e
 
 
@@ -35,6 +34,7 @@ def explore(config: Config) -> None:
         ray.get(explorer.sync_weight.remote())
         ray.get(explorer.explore.remote())
         logger.info("Explore finished.")
+        ray.get(explorer.shutdown.remote())
     except Exception as e:
         logger.error(f"Explore failed: {e}")
         raise e
@@ -60,6 +60,7 @@ def train(config: Config) -> None:
     try:
         ray.get(trainer.train.remote(algo_type))
         logger.info("Train finished.")
+        ray.get(trainer.shutdown.remote())
     except Exception as e:
         logger.error(f"Train failed {e}.")
         raise e
@@ -133,6 +134,9 @@ def both(config: Config) -> None:
         ray.get(explorer.flush_log.remote(step=explore_step_num))
         ray.get(trainer.flush_log.remote(step=train_step_num))
 
+    ray.get(explorer.shutdown.remote())
+    ray.get(trainer.shutdown.remote())
+
 
 def activate_data_module(data_workflow_url: str, config_path: str):
     """Check whether to activate data module and preprocess datasets."""
@@ -148,7 +152,7 @@ def activate_data_module(data_workflow_url: str, config_path: str):
         return
 
 
-def run(config_path: str):
+def run(config_path: str, dlc: bool = False):
     config = load_config(config_path)
     config.check_and_update()
     # try to activate data module
@@ -157,8 +161,13 @@ def run(config_path: str):
         data_processor_config.dj_config_path or data_processor_config.dj_process_desc
     ):
         activate_data_module(data_processor_config.data_workflow_url, config_path)
-    if not ray.is_initialized():
-        ray.init(namespace=f"{config.monitor.project}-{config.monitor.name}")
+    ray_namespace = f"{config.monitor.project}-{config.monitor.name}"
+    if dlc:
+        from trinity.utils.dlc_utils import setup_ray_cluster
+
+        setup_ray_cluster(namespace=ray_namespace)
+    else:
+        ray.init(namespace=ray_namespace, ignore_reinit_error=True)
     if config.mode == "explore":
         explore(config)
     elif config.mode == "train":
@@ -191,18 +200,23 @@ def main() -> None:
 
     # run command
     run_parser = subparsers.add_parser("run", help="Run RFT process.")
-    run_parser.add_argument("--config", type=str, required=True, help="config file path.")
+    run_parser.add_argument("--config", type=str, required=True, help="Path to the config file.")
+    run_parser.add_argument(
+        "--dlc", action="store_true", help="Specify when running in Aliyun PAI DLC."
+    )
 
     # studio command
     studio_parser = subparsers.add_parser("studio", help="Run studio.")
-    studio_parser.add_argument("--port", type=int, default=8501, help="studio port.")
+    studio_parser.add_argument(
+        "--port", type=int, default=8501, help="The port for Trinity-Studio."
+    )
 
     # TODO: add more commands like `monitor`, `label`
 
     args = parser.parse_args()
     if args.command == "run":
         # TODO: support parse all args from command line
-        run(args.config)
+        run(args.config, args.dlc)
     elif args.command == "studio":
         studio(args.port)
 
