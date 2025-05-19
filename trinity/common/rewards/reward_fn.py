@@ -211,30 +211,30 @@ class ElemRewardFn(RewardFn):
         self,
     ) -> None:
         self.stream = False
-        self.model_name = "qwen2.5-14b-instruct"
+        self.model_name = "qwen2.5-32b-instruct"
         self.enable_thinking = False
         self.temp = 0.7
         self.sys_prompt = reward_prompt
 
     def __call__(  # type: ignore
         self,
-        response: str,
+        answer: str,
         prompt: Optional[str] = None,
         truth: Optional[str] = None,
         return_dict: Optional[bool] = False,
     ) -> Union[float, dict]:
         time.sleep(0.1)
-        decision_score, matching_score = self.llm_reward(response, prompt, truth)
+        decision_score, matching_score = self.llm_reward(answer, prompt, truth)
 
         if return_dict:
             return {"decision_score": decision_score, "matching_score": matching_score}
 
         return decision_score + matching_score
 
-    def llm_reward(self, response, prompt, truth):
+    def llm_reward(self, answer, prompt, truth):
         messages = [
             {"role": "system", "content": self.sys_prompt.format(truth)},
-            {"role": "user", "content": response},
+            {"role": "user", "content": answer},
 
         ]
         # logger.info(f"Truth:\n{truth}")
@@ -258,7 +258,6 @@ class ElemRewardFn(RewardFn):
                     for chunk in response:
                         full_content += chunk.output.choices[0].message.content
                     content = full_content
-                logger.info(f"Reward Response:\n{content}")
 
                 decision_score, matching_score = 0.0, 0.0
                 pattern = r"<(\w+)>(.*?)</\1>"
@@ -270,7 +269,7 @@ class ElemRewardFn(RewardFn):
                         decision_score = float(content)
                     if tag_name == "matching_score":
                         matching_score = float(content)
-                # logger.info(f"Reward Score:\ndecision={decision_score}, matching={matching_score}")
+                logger.info(f"try={try_count}, reward for {answer} = {decision_score}, {matching_score}.")
                 return decision_score, matching_score
             except Exception as e:
                 try_count += 1
@@ -279,7 +278,7 @@ class ElemRewardFn(RewardFn):
                     raise  # 抛出最后一次的异常
                 else:
                     logger.warning(
-                        f"error: {e}\nresponse:{response}\nretries: {try_count}")
+                        f"error: {e}, response:{response}, retries: {try_count}")
                 time.sleep(try_count * 1)
 
 
