@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-from typing import List
+from typing import List, Optional
 
 from trinity.common.experience import Experience
 from trinity.common.models.model import ModelWrapper
-from trinity.common.workflows.workflow import WORKFLOWS, MultiTurnWorkflow
+from trinity.common.workflows.workflow import WORKFLOWS, MultiTurnWorkflow, Task
 
 EXAMPLE_PROMPT = """
 Observation：
@@ -96,13 +96,18 @@ def parse_action(response):
 class AlfworldWorkflow(MultiTurnWorkflow):
     """A workflow for alfworld task."""
 
-    def __init__(self, model: ModelWrapper, **kwargs):
-        super().__init__(model)
-        self.system_prompt = kwargs.get("system_prompt", None)  # Unuse here
-        self.task_desc: str = kwargs.get("task_desc")
-        self.truth = kwargs.get("truth")  # Unuse here
-        self.reward_fn = None  # Unuse here
-        self.repeat_times = kwargs.get("repeat_times", 1)
+    def __init__(
+        self,
+        model: ModelWrapper,
+        task: Task,
+        auxiliary_models: Optional[List] = None,
+    ):
+        super().__init__(
+            model=model,
+            task=task,
+        )
+        self.task_desc = task.task_desc or "0"
+        self.repeat_times = task.rollout_args.repeat_times
         self.max_env_steps = 30
 
     def get_model_response(self, messages):

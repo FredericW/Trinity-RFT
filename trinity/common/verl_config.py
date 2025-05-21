@@ -270,7 +270,9 @@ class veRLConfig:
 
     def synchronize_config(self, config: Config) -> None:
         """Synchronize config."""
-        rollout_gpu_num = config.explorer.tensor_parallel_size * config.explorer.engine_num
+        rollout_gpu_num = config.explorer.tensor_parallel_size * config.explorer.engine_num + sum(
+            [model.tensor_parallel_size for model in config.explorer.auxiliary_models]
+        )
         rollout_node_num = rollout_gpu_num // config.cluster.gpu_per_node
         self.trainer.nnodes = config.cluster.node_num - rollout_node_num
         self.actor_rollout_ref.model.path = config.model.model_path
@@ -301,16 +303,20 @@ class veRLConfig:
         self.trainer.default_local_dir = config.model.checkpoint_path
         self.trainer.sft_warmup_steps = config.trainer.sft_warmup_steps
         self.actor_rollout_ref.actor.ppo_mini_batch_size = config.global_config.batch_size
-        self.actor_rollout_ref.rollout.temperature = config.explorer.temperature
-        self.actor_rollout_ref.rollout.n = config.explorer.repeat_times
+        self.actor_rollout_ref.rollout.temperature = (
+            config.buffer.explorer_input.taskset.rollout_args.temperature
+        )
+        self.actor_rollout_ref.rollout.n = (
+            config.buffer.explorer_input.taskset.rollout_args.repeat_times
+        )
         self.critic.ppo_mini_batch_size = config.global_config.batch_size
-        self.critic.rollout_n = config.explorer.repeat_times
+        self.critic.rollout_n = self.actor_rollout_ref.rollout.n
 
-        self.actor_rollout_ref.actor.algorithm_type = config.trainer.algorithm_type
-        if config.trainer.algorithm_type == AlgorithmType.PPO:
+        self.actor_rollout_ref.actor.algorithm_type = config.global_config.algorithm_type
+        if config.global_config.algorithm_type == AlgorithmType.PPO:
             logger.info("Using GAE `adv_estimator` for PPO")
             self.algorithm.adv_estimator = AdvantageEstimator.GAE.value
-        elif config.trainer.algorithm_type == AlgorithmType.GRPO:
+        elif config.global_config.algorithm_type == AlgorithmType.GRPO:
             logger.info("Using GRPO `adv_estimator` for GRPO")
             self.algorithm.adv_estimator = AdvantageEstimator.GRPO.value
 

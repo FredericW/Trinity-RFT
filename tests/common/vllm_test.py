@@ -5,7 +5,7 @@ import torch
 from transformers import AutoTokenizer
 
 from tests.tools import RayUnittestBase, get_template_config
-from trinity.common.models import create_rollout_models
+from trinity.common.models import create_inference_models
 from trinity.common.models.model import ModelWrapper
 from trinity.common.models.utils import (
     tokenize_and_mask_messages_default,
@@ -85,8 +85,9 @@ CHAT_TEMPLATE = r"""
 class BaseTestModelWrapper:
     def test_generate(self):
         prompts = ["Hello, world!", "Hello, my name is"]
-        results = self.model_wrapper.generate(prompts)
-        self.assertEqual(len(results), len(prompts) * self.config.explorer.repeat_times)
+        repeat_times = self.config.buffer.explorer_input.taskset.rollout_args.repeat_times
+        results = self.model_wrapper.generate(prompts, n=repeat_times, temperature=1.0)
+        self.assertEqual(len(results), len(prompts) * repeat_times)
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "What's the weather like today?"},
@@ -96,8 +97,8 @@ class BaseTestModelWrapper:
             },
             {"role": "user", "content": "OK, thanks!"},
         ]
-        results = self.model_wrapper.chat(messages)
-        self.assertEqual(len(results), self.config.explorer.repeat_times)
+        results = self.model_wrapper.chat(messages, n=repeat_times, temperature=1.0)
+        self.assertEqual(len(results), repeat_times)
         for result in results:
             input_logprobs = result.logprobs[: result.prompt_length]
             output_logprobs = result.logprobs[result.prompt_length :]
@@ -126,6 +127,7 @@ class BaseTestModelWrapper:
         )
         self.assertTrue(torch.equal(result_dict["assistant_masks"][0], exp.action_mask))
         self.assertTrue(torch.equal(result_dict["input_ids"][0], exp.tokens))
+        self.assertRaises(ValueError, self.model_wrapper.get_openai_client)
 
 
 class TestModelWrapperSyncV0(BaseTestModelWrapper, RayUnittestBase):
@@ -135,10 +137,10 @@ class TestModelWrapperSyncV0(BaseTestModelWrapper, RayUnittestBase):
         self.config.explorer.engine_type = "vllm"
         self.config.explorer.tensor_parallel_size = 1
         self.config.explorer.engine_num = 2
-        self.config.explorer.repeat_times = 2
+        self.config.buffer.explorer_input.taskset.rollout_args.repeat_times = 2
         self.config.explorer.use_v1 = False
         self.config.explorer.chat_template = CHAT_TEMPLATE
-        self.engines = create_rollout_models(self.config)
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
         self.model_wrapper = ModelWrapper(self.engines[0], model_type="vllm")
 
 
@@ -149,10 +151,10 @@ class TestModelWrapperAsyncV0(BaseTestModelWrapper, RayUnittestBase):
         self.config.explorer.engine_type = "vllm_async"
         self.config.explorer.engine_num = 2
         self.config.explorer.tensor_parallel_size = 1
-        self.config.explorer.repeat_times = 2
+        self.config.buffer.explorer_input.taskset.rollout_args.repeat_times = 2
         self.config.explorer.use_v1 = False
         self.config.explorer.chat_template = CHAT_TEMPLATE
-        self.engines = create_rollout_models(self.config)
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
         self.model_wrapper = ModelWrapper(self.engines[0], model_type="vllm_async")
 
 
@@ -165,7 +167,7 @@ class TestModelWrapperAsyncTPV0(BaseTestModelWrapper, RayUnittestBase):
         self.config.explorer.tensor_parallel_size = 2
         self.config.explorer.use_v1 = False
         self.config.explorer.chat_template = CHAT_TEMPLATE
-        self.engines = create_rollout_models(self.config)
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
         self.model_wrapper = ModelWrapper(self.engines[0], model_type="vllm_async")
 
 
@@ -176,10 +178,10 @@ class TestModelWrapperAsyncTPV1(BaseTestModelWrapper, RayUnittestBase):
         self.config.explorer.engine_type = "vllm_async"
         self.config.explorer.engine_num = 2
         self.config.explorer.tensor_parallel_size = 2
-        self.config.explorer.repeat_times = 2
+        self.config.buffer.explorer_input.taskset.rollout_args.repeat_times = 2
         self.config.explorer.use_v1 = True
         self.config.explorer.chat_template = CHAT_TEMPLATE
-        self.engines = create_rollout_models(self.config)
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
         self.model_wrapper = ModelWrapper(self.engines[0], model_type="vllm_async")
 
 
@@ -192,8 +194,46 @@ class TestModelWrapperAsyncV1(BaseTestModelWrapper, RayUnittestBase):
         self.config.explorer.tensor_parallel_size = 1
         self.config.explorer.use_v1 = True
         self.config.explorer.chat_template = CHAT_TEMPLATE
-        self.engines = create_rollout_models(self.config)
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
         self.model_wrapper = ModelWrapper(self.engines[0], model_type="vllm_async")
+
+
+class TestAPIServer(RayUnittestBase):
+    def setUp(self):
+        self.config = get_template_config()
+        self.config.model.model_path = get_model_path()
+        self.config.explorer.engine_type = "vllm_async"
+        self.config.explorer.engine_num = 1
+        self.config.explorer.tensor_parallel_size = 1
+        self.config.explorer.use_v1 = True
+        self.config.explorer.chat_template = CHAT_TEMPLATE
+        self.config.explorer.enable_openai_api = True
+        self.engines, self.auxiliary_engines = create_inference_models(self.config)
+        self.model_wrapper = ModelWrapper(self.engines[0], model_type="vllm_async")
+
+    def test_api(self):
+        openai_client = self.model_wrapper.get_openai_client()
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is your name?"},
+        ]
+        response = openai_client.chat.completions.create(
+            model=self.config.model.model_path, messages=messages, n=1
+        )
+        self.assertEqual(1, len(response.choices))
+        self.assertTrue(len(response.choices[0].message.content) > 0)
+        response = openai_client.chat.completions.create(
+            model=self.config.model.model_path,
+            messages=messages,
+            n=2,
+            temperature=0.5,
+            logprobs=True,
+            top_logprobs=0,
+        )
+        self.assertEqual(2, len(response.choices))
+        self.assertTrue(response.choices[0].logprobs is not None)
+        self.assertEqual(0, len(response.choices[0].logprobs.content[0].top_logprobs))
+        self.assertTrue(response.choices[0].logprobs.content[0].logprob < 0)
 
 
 class TestTokenizer(unittest.TestCase):

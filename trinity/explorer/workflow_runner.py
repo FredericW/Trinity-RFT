@@ -11,10 +11,9 @@ import ray
 
 from trinity.buffer import get_buffer_writer
 from trinity.common.config import Config
-from trinity.common.constants import TaskType
 from trinity.common.experience import Experience
 from trinity.common.models.model import InferenceModel, ModelWrapper
-from trinity.common.task import Task
+from trinity.common.workflows import Task
 from trinity.utils.log import get_logger
 
 
@@ -31,14 +30,30 @@ class Status:
 class WorkflowRunner:
     """A Ray remote actor to run the workflow and put the returned experiences into the buffer."""
 
-    def __init__(self, config: Config, model: InferenceModel) -> None:
+    def __init__(
+        self,
+        config: Config,
+        model: InferenceModel,
+        auxiliary_models: Optional[List[InferenceModel]] = None,
+    ) -> None:
         self.config = config
         self.experience_buffer = get_buffer_writer(
             self.config.buffer.explorer_output,  # type: ignore
             self.config.buffer,
         )
         self.model = model
-        self.model_wrapper = ModelWrapper(model, config.explorer.engine_type)
+        self.model_wrapper = ModelWrapper(
+            model,
+            config.explorer.engine_type,
+        )
+        self.auxiliary_models = []
+        if auxiliary_models is not None:
+            for model in auxiliary_models:
+                api_client = ModelWrapper(
+                    model,
+                    "vllm_async",
+                ).get_openai_client()
+                self.auxiliary_models.append(api_client)
         self.logger = get_logger(__name__)
 
     def is_alive(self):
@@ -48,7 +63,7 @@ class WorkflowRunner:
         """Init workflow from the task and run it."""
         if task.workflow is None:
             raise ValueError("Workflow is not set in the task.")
-        workflow = task.to_workflow(self.model_wrapper, self.config)
+        workflow = task.to_workflow(self.model_wrapper, self.auxiliary_models)
         return workflow.run()
 
     def run_task(self, task: Task) -> Status:
@@ -77,7 +92,7 @@ class WorkflowRunner:
             if metrics:
                 for k, v in metrics.items():
                     metric[k] = sum(v) / len(v)  # type: ignore
-            if not task.task_type == TaskType.EVAL:
+            if not task.is_eval:
                 self.experience_buffer.write(exps)
             return Status(True, metric=metric)
         except Exception as e:
