@@ -257,7 +257,7 @@ class ElemWorkflowLocal(Workflow):
             model=model,
             task=task,
         )
-        from trinity.common.elem_prompts import test_prompt_v2e1 as system_prompt
+        from trinity.common.elem_prompts import test_prompt_v2e2 as system_prompt
         self.format_args = task.format_args
         self.system_prompt = system_prompt
         self.reply_prefix = task.format_args.reply_prefix
@@ -268,11 +268,11 @@ class ElemWorkflowLocal(Workflow):
         self.reward_model = "qwen2.5-32b-instruct"
         self.reward_model_stream = False
 
-        reward_fn = task.reward_fn
-        if isinstance(reward_fn, type) and issubclass(reward_fn, RewardFn):
-            self.reward_fn: RewardFn = reward_fn()
-        else:
-            raise ValueError("`reward_fn` must be a subclass of `RewardFn`")
+        # reward_fn = task.reward_fn
+        # if isinstance(reward_fn, type) and issubclass(reward_fn, RewardFn):
+        #     self.reward_fn: RewardFn = reward_fn()
+        # else:
+        #     raise ValueError("`reward_fn` must be a subclass of `RewardFn`")
         # Rollout args
         rollout_args = asdict(task.rollout_args)
         rollout_args["n"] = rollout_args["repeat_times"]
@@ -294,7 +294,7 @@ class ElemWorkflowLocal(Workflow):
 
         logger.debug("start chat")
         responses = self.model.chat(messages, **self.rollout_args)
-        for response in responses:
+        for index, response in enumerate(responses):
             reward = self.reward_fn(  # type: ignore [misc]
                 response=response.response_text,  # type: ignore [arg-type]
                 truth=self.truth,
@@ -304,6 +304,8 @@ class ElemWorkflowLocal(Workflow):
                 f"self.task_desc: {self.task_desc}, messages: {messages}, response: {response.response_text}, reward: {reward}"
             )
             response.reward = reward
+            logger.info(
+                f"rollout: {index}, reward: {response.reward}, truth:{self.truth[:15]}..., response: {response.response_text[:15]}...")
         return responses
 
     def reward_fn(self, response, truth, return_dict=False):
@@ -346,8 +348,6 @@ class ElemWorkflowLocal(Workflow):
                         decision_score = float(content)
                     if tag_name == "matching_score":
                         matching_score = float(content)
-                logger.info(
-                    f"try_count: {try_count}, input: “{response[:50]}...”, reward: {decision_score + 2 * matching_score}.")
                 return decision_score + 2 * matching_score
             except Exception as e:
                 try_count += 1
