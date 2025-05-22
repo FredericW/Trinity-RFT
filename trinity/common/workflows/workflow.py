@@ -328,7 +328,7 @@ class ElemWorkflowLocal(Workflow):
                     stream=self.reward_model_stream
                 )
 
-                if self.stream == False:
+                if not self.reward_model_stream:
                     content = completion.choices[0].message.content
                 else:
                     content = ""
