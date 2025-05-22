@@ -218,23 +218,23 @@ class ElemRewardFn(RewardFn):
 
     def __call__(  # type: ignore
         self,
-        answer: str,
+        response: str,
         prompt: Optional[str] = None,
         truth: Optional[str] = None,
         return_dict: Optional[bool] = False,
     ) -> Union[float, dict]:
         time.sleep(0.1)
-        decision_score, matching_score = self.llm_reward(answer, prompt, truth)
+        decision_score, matching_score = self.llm_reward(response, prompt, truth)
 
         if return_dict:
             return {"decision_score": decision_score, "matching_score": matching_score}
 
         return decision_score + matching_score
 
-    def llm_reward(self, answer, prompt, truth):
+    def llm_reward(self, response, prompt, truth):
         messages = [
             {"role": "system", "content": self.sys_prompt.format(truth)},
-            {"role": "user", "content": answer},
+            {"role": "user", "content": response},
 
         ]
         # logger.info(f"Truth:\n{truth}")
@@ -242,7 +242,7 @@ class ElemRewardFn(RewardFn):
         try_count, max_retries = 0, 5
         while try_count <= max_retries:
             try:
-                response = dashscope.Generation.call(
+                reward_response = dashscope.Generation.call(
                     api_key=os.getenv("DASHSCOPE_API_KEY"),
                     model=self.model_name,
                     messages=messages,
@@ -252,10 +252,10 @@ class ElemRewardFn(RewardFn):
                     temperature=self.temp
                 )
                 if self.stream == False:
-                    content = response["output"]["choices"][0]["message"]["content"]
+                    content = reward_response["output"]["choices"][0]["message"]["content"]
                 else:
                     full_content = ""
-                    for chunk in response:
+                    for chunk in reward_response:
                         full_content += chunk.output.choices[0].message.content
                     content = full_content
 
@@ -269,8 +269,8 @@ class ElemRewardFn(RewardFn):
                         decision_score = float(content)
                     if tag_name == "matching_score":
                         matching_score = float(content)
-                logger.info(f"try={try_count}, reward for {answer} = {decision_score}, {matching_score}.")
-                return decision_score, matching_score
+                logger.info(f"try: {try_count}, input: “{response[:50]}”, reward: {decision_score+2*matching_score}.")
+                return decision_score, 2*matching_score
             except Exception as e:
                 try_count += 1
                 if try_count > max_retries:

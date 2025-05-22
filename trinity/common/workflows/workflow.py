@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """Base Workflow Class"""
-import logging
-
 from __future__ import annotations
 
+import os
+import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from typing import Any, List, Optional, Type, Union
@@ -225,21 +226,135 @@ class MathWorkflow(SimpleWorkflow):
 
 @WORKFLOWS.register_module("elem_workflow")
 class ElemWorkflow(SimpleWorkflow):
-    """A workflow for math tasks as introduced in DeepSeek-R1."""
+    """A workflow for Elem tasks with remote model service."""
+    def __init__(
+        self,
+        model: ModelWrapper,
+        task: Task,
+        **kwargs,
+    ):
+        from trinity.common.elem_prompts import test_prompt_v2e1 as system_prompt
+        if task.reward_fn is None:
+            task.reward_fn = ElemRewardFn
+        task.format_args.system_prompt = system_prompt
+
+        super().__init__(
+            model,
+            task=task,
+        )
+
+@WORKFLOWS.register_module("elem_workflow_local")
+class ElemWorkflowLocal(Workflow):
+    """A workflow for Elem training with local model."""
 
     def __init__(
         self,
         model: ModelWrapper,
-        **kwargs,
+        task: Task,
+        auxiliary_models: Optional[List[openai.OpenAI]] = None,
     ):
-        from trinity.common.elem_prompts import test_prompt_v2e1 as system_prompt
-        if kwargs.get("reward_fn", None) is None:
-            kwargs["reward_fn"] = ElemRewardFn
-        kwargs[
-            "system_prompt"
-        ] = system_prompt
-
         super().__init__(
-            model,
-            **kwargs,
+            model=model,
+            task=task,
         )
+        from trinity.common.elem_prompts import test_prompt_v2e1 as system_prompt
+        self.format_args = task.format_args
+        self.system_prompt = system_prompt
+        self.reply_prefix = task.format_args.reply_prefix
+
+        self.raw_task = task.raw_task
+        self.task_desc = task.task_desc
+        self.truth = task.truth
+        self.reward_model = "qwen2.5-32b-instruct"
+        self.reward_model_stream = False
+
+        reward_fn = task.reward_fn
+        if isinstance(reward_fn, type) and issubclass(reward_fn, RewardFn):
+            self.reward_fn: RewardFn = reward_fn()
+        else:
+            raise ValueError("`reward_fn` must be a subclass of `RewardFn`")
+        # Rollout args
+        rollout_args = asdict(task.rollout_args)
+        rollout_args["n"] = rollout_args["repeat_times"]
+        self.rollout_args = rollout_args
+        self.is_eval = task.is_eval
+
+    def format_messages(self):
+        messages = []
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
+        messages.append({"role": "user", "content": self.task_desc})
+        if self.reply_prefix:
+            messages.append({"role": "assistant", "content": self.reply_prefix})
+        return messages
+
+    def run(self) -> List[Experience]:
+        # TODO: Optimize the generate function
+        messages = self.format_messages()
+
+        logger.debug("start chat")
+        responses = self.model.chat(messages, **self.rollout_args)
+        for response in responses:
+            reward = self.reward_fn(  # type: ignore [misc]
+                response=response.response_text,  # type: ignore [arg-type]
+                truth=self.truth,
+                return_dict=self.is_eval,
+            )
+            logger.debug(
+                f"self.task_desc: {self.task_desc}, messages: {messages}, response: {response.response_text}, reward: {reward}"
+            )
+            response.reward = reward
+        return responses
+
+    def reward_fn(self, response, truth, return_dict=False):
+        from trinity.common.elem_prompts import reward_prompt_v1a as reward_prompt
+        messages = [
+            {"role": "system", "content": reward_prompt.format(truth)},
+            {"role": "user", "content": response},
+
+        ]
+        # logger.info(f"Truth:\n{truth}")
+        # logger.info(f"Rollout:\n{response}")
+        try_count, max_retries = 0, 5
+        while try_count <= max_retries:
+            try:
+                client = openai.OpenAI(
+                    api_key=os.getenv("DASHSCOPE_API_KEY"),
+                    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                )
+                completion = client.chat.completions.create(
+                    model=self.reward_model,
+                    messages=messages,
+                    stream=self.reward_model_stream
+                )
+
+                if self.stream == False:
+                    content = completion.choices[0].message.content
+                else:
+                    content = ""
+                    for chunk in completion:
+                        if chunk.choices:
+                            content += chunk.choices[0].delta.content
+
+                decision_score, matching_score = 0.0, 0.0
+                pattern = r"<(\w+)>(.*?)</\1>"
+                matches = re.findall(pattern, content)
+                for tag_name, content in matches:
+                    if tag_name == "think":
+                        think = content
+                    if tag_name == "decision_score":
+                        decision_score = float(content)
+                    if tag_name == "matching_score":
+                        matching_score = float(content)
+                logger.info(
+                    f"try_count: {try_count}, input: “{response[:50]}...”, reward: {decision_score + 2 * matching_score}.")
+                return decision_score + 2 * matching_score
+            except Exception as e:
+                try_count += 1
+                if try_count > max_retries:
+                    logger.warning("retried too many times, abort task.")
+                    raise  # 抛出最后一次的异常
+                else:
+                    logger.warning(
+                        f"error: {e}, response:{response}, retries: {try_count}")
+                time.sleep(try_count * 1)

@@ -3,7 +3,7 @@
 from .envs.alfworld.alfworld_workflow import AlfworldWorkflow
 from .envs.sciworld.sciworld_workflow import SciWorldWorkflow
 from .envs.webshop.webshop_workflow import WebShopWorkflow
-from .workflow import WORKFLOWS, MathWorkflow, SimpleWorkflow, ElemWorkflow, Task
+from .workflow import WORKFLOWS, MathWorkflow, SimpleWorkflow, ElemWorkflow, ElemWorkflowLocal, Task
 
 __all__ = [
     "Task",
@@ -13,5 +13,6 @@ __all__ = [
     "WebShopWorkflow",
     "AlfworldWorkflow",
     "SciWorldWorkflow",
-    "ElemWorkflow"
+    "ElemWorkflow",
+    "ElemWorkflowLocal"
 ]
