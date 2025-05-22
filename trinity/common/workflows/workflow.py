@@ -273,6 +273,7 @@ class ElemWorkflowLocal(Workflow):
         #     self.reward_fn: RewardFn = reward_fn()
         # else:
         #     raise ValueError("`reward_fn` must be a subclass of `RewardFn`")
+
         # Rollout args
         rollout_args = asdict(task.rollout_args)
         rollout_args["n"] = rollout_args["repeat_times"]
@@ -305,7 +306,7 @@ class ElemWorkflowLocal(Workflow):
             )
             response.reward = reward
             logger.info(
-                f"rollout: {index}, reward: {response.reward}, truth:{self.truth[:15]}..., response: {response.response_text[:15]}...")
+                f"#{index}, reward: {response.reward}, response: {response.response_text[:15]}...")
         return responses
 
     def reward_fn(self, response, truth, return_dict=False):
